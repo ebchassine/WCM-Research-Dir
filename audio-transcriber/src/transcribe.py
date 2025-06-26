@@ -17,6 +17,7 @@ python src/transcribe.py \
     video-sources/test.mp4 \
     /results/audio-transcriber \
     --model base
+    
 
 """
 def convert_video_to_audio(video_path: Path) -> Path:

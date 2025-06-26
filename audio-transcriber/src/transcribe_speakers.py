@@ -7,13 +7,19 @@ from dotenv import load_dotenv
 import torch
 import whisper
 from pyannote.audio import Pipeline
+"""
 
-# Load environment variables (e.g., PYANNOTE_KEY) from .env
+python src/transcribe_speakers.py \
+    video-sources/test_1.mp4 \
+    /results/script_results.txt \
+    --model base
+
+"""
 load_dotenv()
 
-# Determine preferred device for Whisper (MPS or CUDA), fallback to CPU
+# get device for Whisper
 if torch.backends.mps.is_available():
-    whisper_device = 'mps'
+    whisper_device = 'cuda' if False else 'cpu'  # option to fill in later when MPS is supported 
 elif torch.cuda.is_available():
     whisper_device = 'cuda'
 else:
@@ -22,7 +28,6 @@ print(f"🛠 Whisper device: {whisper_device}")
 
 
 def convert_to_wav(input_path: Path) -> Path:
-    """Convert any media file to 16 kHz mono WAV."""
     wav_path = input_path.with_suffix('.wav')
     subprocess.run(
         ['ffmpeg', '-y', '-i', str(input_path), '-ar', '16000', '-ac', '1', str(wav_path)],
@@ -32,9 +37,8 @@ def convert_to_wav(input_path: Path) -> Path:
 
 
 def parse_rttm(rttm_path: Path):
-    """Parse RTTM file into list of (start, end, label)."""
     segments = []
-    with open(rttm_path, 'r') as f:
+    with rttm_path.open('r') as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 8 and parts[0] == 'SPEAKER':
@@ -45,66 +49,69 @@ def parse_rttm(rttm_path: Path):
     return segments
 
 
-def assign_speaker(segment: dict, diarization: list) -> str:
-    """Assign speaker to a transcription segment by midpoint timestamp."""
+def assign_label(segment, diarization):
+    # Return the original diarization label for segment midpoint
     midpoint = (segment['start'] + segment['end']) / 2
     for start, end, label in diarization:
         if start <= midpoint < end:
-            if '_' in label:
-                try:
-                    idx = int(label.split('_')[-1]) + 1
-                    return f"Speaker {idx}"
-                except ValueError:
-                    pass
             return label
-    return 'Speaker 1'
+    return None
 
 
 def transcribe_speakers(input_file: Path, output_file: Path, model_size: str):
-    # 1. Convert to WAV
+    # Convert to WAV
     wav = convert_to_wav(input_file)
 
-    # 2. Load and run Whisper
-    try:
-        print(f" Loading Whisper model ({model_size}) on {whisper_device}...")
-        model = whisper.load_model(model_size, device=whisper_device)
-    except NotImplementedError as e:
-        print(f" Whisper on {whisper_device} failed: {e}. Using CPU.")
-        model = whisper.load_model(model_size, device='cpu')
-    print(f"⏳ Transcribing {wav.name}...")
-    result = model.transcribe(str(wav))
+    # Whisper transcription
+    print(f"Loading Whisper model ({model_size}) on {whisper_device}...")
+    model = whisper.load_model(model_size, device=whisper_device)
+    print(f"Transcribing {wav.name}...")
+    result = model.transcribe(str(wav), word_timestamps=True)
 
-    # 3. Speaker diarization with PyAnnote (CPU)
+    # Diarization 
     hf_key = os.getenv('PYANNOTE_KEY')
     if not hf_key:
-        raise RuntimeError('Missing PYANNOTE_KEY in environment')
-    print(f" Initializing PyAnnote speaker-diarization pipeline...")
+        raise RuntimeError('PYANNOTE_KEY not set')
+    print(f"Init PyAnnote pipeline...")
     pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization', use_auth_token=hf_key)
-    print(f" Running diarization on {wav.name}...")
-    diarization_result = pipeline(str(wav))
-
-    # 4. Write RTTM and parse
+    print(f"Running diarization on {wav.name}...")
+    diar_res = pipeline(str(wav))
     rttm_path = wav.with_suffix('.rttm')
-    with open(rttm_path, 'w') as f:
-        f.write(diarization_result.to_rttm())
+    with rttm_path.open('w') as f:
+        f.write(diar_res.to_rttm())
     diarization = parse_rttm(rttm_path)
 
-    # 5. Merge and write speaker-labeled transcript
+    # Map raw labels to speaker k
+    label_map = {}
+    order = sorted({label for _, _, label in diarization}, key=lambda l: next(s for s in diarization if s[2]==l)[0])
+    for idx, lab in enumerate(order, start=1):
+        label_map[lab] = f"Speaker {idx}"
+
+    # Merge segments by speaker and time gap
+    merged = []
+    last_speaker = None
+    last_end = 0.0
+    for seg in result['segments']:
+        lab = assign_label(seg, diarization)
+        speaker = label_map.get(lab, 'Speaker 1')
+        text = seg['text'].strip()
+        if speaker == last_speaker and seg['start'] - last_end < 0.5:
+            merged[-1] = merged[-1].rstrip() + ' ' + text
+        else:
+            merged.append(f"{speaker}: {text}")
+        last_speaker = speaker
+        last_end = seg['end']
+
+    # Output write here 
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w', encoding='utf-8') as fout:
-        for seg in result.get('segments', []):
-            speaker = assign_speaker(seg, diarization)
-            text = seg['text'].strip()
-            fout.write(f"{speaker}: {text}\n")
-    print(f"saved speaker-labeled transcript to {output_file}")
+    output_file.write_text("\n".join(merged), encoding='utf-8')
+    print(f"Saved improved transcript to {output_file}")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Transcribe media and label speakers using Whisper + PyAnnote'
-    )
-    parser.add_argument('input', type=Path, help='Input media file')
-    parser.add_argument('output', type=Path, help='Output transcript (.txt)')
-    parser.add_argument('--model', type=str, default='base', help='Whisper model size')
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument('input', type=Path)
+    p.add_argument('output', type=Path)
+    p.add_argument('--model', default='base')
+    args = p.parse_args()
     transcribe_speakers(args.input, args.output, args.model)

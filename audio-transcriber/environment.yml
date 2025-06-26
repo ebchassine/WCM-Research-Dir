@@ -1,0 +1,13 @@
+name: audio-transcriber
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - ffmpeg
+  - pip
+  - python-dotenv
+  - pip:
+    - torch                
+    - openai-whisper       # Whisper inference
+    - tqdm                 # progress bars
+    - pyannote.audio       # optional: speaker diarization
