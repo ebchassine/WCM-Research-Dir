@@ -16,8 +16,8 @@ audio-transcriber/
 ├── README.md
 ├── .gitignore
 └── src/
-├── transcribe.py # main transcription
-└── diarize.py # optional speaker-diarization
+    ├── transcribe.py # main transcription
+    └── diarize.py # optional speaker-diarization
 
 ## Installation
 
@@ -27,7 +27,7 @@ git clone https://github.com/yourusername/audio-transcriber.git
 cd audio-transcriber
 
 # 2. Create & activate conda env
-conda env create -f environment.yml
+conda env create --name audio-transcriber --file=environment.yml
 conda activate audio-transcriber
 ```
 
