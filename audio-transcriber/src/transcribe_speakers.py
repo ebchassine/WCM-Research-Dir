@@ -10,7 +10,7 @@ from pyannote.audio import Pipeline
 """
 
 python src/transcribe_speakers.py \
-    video-sources/test_1.mp4 \
+    video-sources/video1.mp4 \
     /results/script_results.txt \
     --model base
 

@@ -10,4 +10,4 @@ dependencies:
     - torch                
     - openai-whisper       # Whisper inference
     - tqdm                 # progress bars
-    - pyannote.audio       # optional: speaker diarization
+    - pyannote.audio       # speaker diarization
