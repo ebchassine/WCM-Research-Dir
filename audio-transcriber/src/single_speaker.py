@@ -96,7 +96,7 @@ def parse_args():
     p.add_argument('--output',  type=Path, required=True, help='Output transcript (.txt)')
     p.add_argument('--model',   type=str,  default='base', help='Whisper model size')
     p.add_argument('--block-duration', type=float, default=600,
-                   help='Block duration in seconds (default: 600)')
+                   help='Block duration in seconds (default: 600s or 10 min)')
     p.add_argument('--overlap', type=float, default=5,
                    help='Overlap between blocks in seconds (default: 5)')
     p.add_argument('--merge-threshold', type=float, default=0.5,
