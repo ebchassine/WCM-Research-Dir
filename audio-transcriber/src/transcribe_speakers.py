@@ -1,117 +1,146 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+
+# Example usage:
+# python transcribe_speakers.py \
+#     --video video-sources/video1.mp4 \
+#     --output results/diarized_script.txt \
+#     --model base \
+#     --block-duration 600 \
+#     --overlap 5
+
 import os
-import subprocess
 import argparse
+import tempfile
+import subprocess
+import multiprocessing
 from pathlib import Path
 from dotenv import load_dotenv
-import torch
+
 import whisper
 from pyannote.audio import Pipeline
-"""
 
-python src/transcribe_speakers.py \
-    video-sources/video1.mp4 \
-    /results/script_results.txt \
-    --model base
-
-"""
+# Load environment variables (for PYANNOTE_API_KEY)
 load_dotenv()
-
-# get device for Whisper
-if torch.backends.mps.is_available():
-    whisper_device = 'cuda' if False else 'cpu'  # option to fill in later when MPS is supported 
-elif torch.cuda.is_available():
-    whisper_device = 'cuda'
-else:
-    whisper_device = 'cpu'
-print(f"🛠 Whisper device: {whisper_device}")
+PYANNOTE_API_KEY = os.getenv("PYANNOTE_KEY")
 
 
-def convert_to_wav(input_path: Path) -> Path:
-    wav_path = input_path.with_suffix('.wav')
-    subprocess.run(
-        ['ffmpeg', '-y', '-i', str(input_path), '-ar', '16000', '-ac', '1', str(wav_path)],
-        check=True
+def get_video_duration(video_path):
+    result = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries',
+         'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+        capture_output=True, text=True
     )
-    return wav_path
+    return float(result.stdout.strip())
 
 
-def parse_rttm(rttm_path: Path):
+def split_video(video_path, output_dir, segment_duration=600, overlap=5):
+    os.makedirs(output_dir, exist_ok=True)
+    total_duration = get_video_duration(video_path)
     segments = []
-    with rttm_path.open('r') as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 8 and parts[0] == 'SPEAKER':
-                start = float(parts[3])
-                duration = float(parts[4])
-                label = parts[7]
-                segments.append((start, start + duration, label))
+    start = 0
+    i = 0
+    while start < total_duration:
+        end = min(start + segment_duration + overlap, total_duration)
+        segment_file = f"{output_dir}/segment_{i:03d}.mp4"
+        cmd = [
+            'ffmpeg', '-y', '-i', video_path,
+            '-ss', str(start), '-to', str(end),
+            '-c', 'copy', segment_file
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        segments.append((segment_file, start, end))
+        start += segment_duration
+        i += 1
     return segments
 
 
-def assign_label(segment, diarization):
-    # Return the original diarization label for segment midpoint
-    midpoint = (segment['start'] + segment['end']) / 2
-    for start, end, label in diarization:
-        if start <= midpoint < end:
-            return label
-    return None
+def convert_to_wav(input_path, output_path):
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-ac", "1", "-ar", "16000", "-f", "wav", output_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
 
 
-def transcribe_speakers(input_file: Path, output_file: Path, model_size: str):
-    # Convert to WAV
-    wav = convert_to_wav(input_file)
-
-    # Whisper transcription
-    print(f"Loading Whisper model ({model_size}) on {whisper_device}...")
-    model = whisper.load_model(model_size, device=whisper_device)
-    print(f"Transcribing {wav.name}...")
-    result = model.transcribe(str(wav), word_timestamps=True)
-
-    # Diarization 
-    hf_key = os.getenv('PYANNOTE_KEY')
-    if not hf_key:
-        raise RuntimeError('PYANNOTE_KEY not set')
-    print(f"Init PyAnnote pipeline...")
-    pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization', use_auth_token=hf_key)
-    print(f"Running diarization on {wav.name}...")
-    diar_res = pipeline(str(wav))
-    rttm_path = wav.with_suffix('.rttm')
-    with rttm_path.open('w') as f:
-        f.write(diar_res.to_rttm())
-    diarization = parse_rttm(rttm_path)
-
-    # Map raw labels to speaker k
-    label_map = {}
-    order = sorted({label for _, _, label in diarization}, key=lambda l: next(s for s in diarization if s[2]==l)[0])
-    for idx, lab in enumerate(order, start=1):
-        label_map[lab] = f"Speaker {idx}"
-
-    # Merge segments by speaker and time gap
-    merged = []
-    last_speaker = None
-    last_end = 0.0
-    for seg in result['segments']:
-        lab = assign_label(seg, diarization)
-        speaker = label_map.get(lab, 'Speaker 1')
-        text = seg['text'].strip()
-        if speaker == last_speaker and seg['start'] - last_end < 0.5:
-            merged[-1] = merged[-1].rstrip() + ' ' + text
-        else:
-            merged.append(f"{speaker}: {text}")
-        last_speaker = speaker
-        last_end = seg['end']
-
-    # Output write here 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text("\n".join(merged), encoding='utf-8')
-    print(f"Saved improved transcript to {output_file}")
+def transcribe_segment(segment_path, model_name='base'):
+    model = whisper.load_model(model_name)
+    result = model.transcribe(segment_path, word_timestamps=True)
+    return result
 
 
-if __name__ == '__main__':
-    p = argparse.ArgumentParser()
-    p.add_argument('input', type=Path)
-    p.add_argument('output', type=Path)
-    p.add_argument('--model', default='base')
-    args = p.parse_args()
-    transcribe_speakers(args.input, args.output, args.model)
+def diarize_segment(wav_path):
+    if not PYANNOTE_API_KEY:
+        raise EnvironmentError("Missing PYANNOTE_API_KEY in environment")
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=PYANNOTE_API_KEY)
+    diarization = pipeline(wav_path)
+    return diarization
+
+
+def process_segment(args):
+    segment_path, start_time, _, model_name = args
+    try:
+        # Convert to WAV for diarization
+        wav_path = segment_path.replace(".mp4", ".wav")
+        convert_to_wav(segment_path, wav_path)
+
+        # Transcribe (can use .mp4)
+        transcription = transcribe_segment(segment_path, model_name)
+
+        # Diarize (must use .wav)
+        diarization = diarize_segment(wav_path)
+
+        entries = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            segment_text = ''
+            for seg in transcription['segments']:
+                seg_start = seg['start']
+                seg_end = seg['end']
+                abs_start = start_time + seg_start
+                abs_end = start_time + seg_end
+                if abs_start >= start_time + turn.start and abs_end <= start_time + turn.end:
+                    segment_text += seg['text'].strip() + ' '
+            if segment_text.strip():
+                entries.append({
+                    'start': round(start_time + turn.start, 2),
+                    'end': round(start_time + turn.end, 2),
+                    'speaker': speaker,
+                    'text': segment_text.strip()
+                })
+        return entries
+    except Exception as e:
+        print(f"Error processing segment {segment_path}: {e}")
+        return []
+
+
+def run_pipeline(video_path, output_txt, model_name='base', block_duration=600, overlap=5):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        segments = split_video(video_path, tmpdir, segment_duration=block_duration, overlap=overlap)
+        print(f"Segmented video into {len(segments)} parts.")
+
+        args = [(seg_path, start, end, model_name) for seg_path, start, end in segments]
+        with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+            results = pool.map(process_segment, args)
+
+        all_entries = [entry for sublist in results for entry in sublist]
+        all_entries.sort(key=lambda x: x['start'])
+
+        os.makedirs(os.path.dirname(output_txt), exist_ok=True)
+        with open(output_txt, 'w') as f:
+            for row in all_entries:
+                speaker_label = row['speaker'].replace("SPEAKER_", "Speaker ")
+                f.write(f"{speaker_label}: {row['text']}\n")
+        print(f"Saved diarized script to {output_txt}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--video', type=str, required=True, help='Path to input video file')
+    parser.add_argument('--output', type=str, required=True, help='Path to output TXT file')
+    parser.add_argument('--model', type=str, default='base', help='Whisper model to use (e.g., tiny, base, small, medium, large)')
+    parser.add_argument('--block-duration', type=int, default=600, help='Segment duration in seconds (default: 600)')
+    parser.add_argument('--overlap', type=int, default=5, help='Overlap between segments in seconds (default: 5)')
+    args = parser.parse_args()
+
+    run_pipeline(args.video, args.output, model_name=args.model,
+                 block_duration=args.block_duration, overlap=args.overlap)
