@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 
 # Example usage:
-# python transcribe_speakers.py \
-#     --video video-sources/video1.mp4 \
-#     --output results/diarized_script.txt \
-#     --model base \
-#     --block-duration 600 \
-#     --overlap 5
+"""
+python src/transcribe_speakers.py \
+    --video files/testing_files/test.mp4 \
+    --output results/test_output.txt \
+    --model large \
+    --block-duration 600 \
+    --overlap 5
+"""
 
 import os
 import argparse
@@ -30,6 +32,8 @@ def get_video_duration(video_path):
          'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
         capture_output=True, text=True
     )
+    assert result.stdout.strip(), "get_video_duration failed"
+    # print("LENGTH OUTPUT", result.stdout.strip())
     return float(result.stdout.strip())
 
 

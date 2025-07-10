@@ -1,20 +1,19 @@
 #!/bin/bash
 
 # List of STAR IDs to process
-star_ids=(264)
+star_ids=(270)
 
 # Segments to check
 segments=("eval" "bl" "wk3" "wk5" "wk9")
 
 # Base directory for audio files
 FILES_DIR="./files"
-# Base directory for output
 OUTPUT_DIR="./outputs"
 # Paths to scripts
 SINGLE_SCRIPT="./src/single_speaker.py"
 DUAL_SCRIPT="./src/transcribe_speakers.py"
 # Whisper model size
-MODEL="base"
+MODEL="large"
 
 echo "Iterating through STAR IDS: ${star_ids}"
 echo "Base dir: ${FILES_DIR}"
@@ -58,7 +57,6 @@ for star_id in "${star_ids[@]}"; do
             echo "Processing $filepath → $output_file"
 
             python "$script" --input "$filepath" --output "$output_file" --model "$MODEL"
-            
         done
     done
 done
