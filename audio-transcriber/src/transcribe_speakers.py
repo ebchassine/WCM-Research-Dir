@@ -3,9 +3,17 @@
 # Example usage:
 """
 python src/transcribe_speakers.py \
-    --video files/testing_files/test.mp4 \
+    --input files/testing_files/test.mp4 \
     --output results/test_output.txt \
     --model large \
+    --block-duration 600 \
+    --overlap 5
+
+
+python src/transcribe_speakers.py \
+    --input files/testing_files/test.mp4 \
+    --output results/test_output.txt \
+    --model medium \
     --block-duration 600 \
     --overlap 5
 """
@@ -139,12 +147,11 @@ def run_pipeline(video_path, output_txt, model_name='base', block_duration=600, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--video', type=str, required=True, help='Path to input video file')
+    parser.add_argument('--input', type=str, required=True, help='Path to input video file')
     parser.add_argument('--output', type=str, required=True, help='Path to output TXT file')
-    parser.add_argument('--model', type=str, default='base', help='Whisper model to use (e.g., tiny, base, small, medium, large)')
+    parser.add_argument('--model', type=str, default='medium', help='Whisper model to use (e.g., tiny, base, small, medium, large)')
     parser.add_argument('--block-duration', type=int, default=600, help='Segment duration in seconds (default: 600)')
     parser.add_argument('--overlap', type=int, default=5, help='Overlap between segments in seconds (default: 5)')
     args = parser.parse_args()
 
-    run_pipeline(args.video, args.output, model_name=args.model,
-                 block_duration=args.block_duration, overlap=args.overlap)
+    run_pipeline(args.input, args.output, model_name=args.model, block_duration=args.block_duration, overlap=args.overlap)
